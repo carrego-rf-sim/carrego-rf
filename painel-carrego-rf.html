@@ -365,6 +365,17 @@ let MARKET = {
     {v:"NTN-B 50", venc:"2050-08-15", anbima:7.33,   expect:7.3625,  du:11.98, impl:6.3882},
     {v:"NTN-B 55", venc:"2055-05-15", anbima:7.2955, expect:7.33,    du:12.92, impl:6.4270},
     {v:"NTN-B 60", venc:"2060-08-15", anbima:7.2826, expect:7.3142,  du:13.24, impl:6.4447},
+  ],
+  // Prefixados (taxa nominal; implícita = 0). du em anos.
+  ltn: [
+    {v:"LTN 2028", venc:"2028-01-01", taxa:14.07, du:1.58},
+    {v:"LTN 2030", venc:"2030-01-01", taxa:14.07, du:3.58},
+    {v:"LTN 2032", venc:"2032-01-01", taxa:14.11, du:5.58},
+  ],
+  ntnf: [
+    {v:"NTN-F 2031", venc:"2031-01-01", taxa:14.06, du:3.58},
+    {v:"NTN-F 2033", venc:"2033-01-01", taxa:14.13, du:4.62},
+    {v:"NTN-F 2035", venc:"2035-01-01", taxa:14.13, du:5.42},
   ]
 };
 const ntnbByVertex = () => Object.fromEntries(MARKET.ntnb.map(r=>[r.v,r]));
@@ -388,9 +399,15 @@ function presets(){
     list.push({label:`${v} · Principal`, nome:`${v} Principal`, venc:r.venc,
       taxa:r.expect, impl:r.impl, dur:+r.du.toFixed(2), conv:1, hint:`Zero cupom · implícita ${r.impl.toFixed(2)}%`});
   });
-  // Prefixados (implícita = 0)
-  list.push({label:"LTN Jan/32", nome:"LTN Jan/32", venc:"2032-01-01", taxa:13.40, impl:0, dur:5.79, conv:1, hint:"Prefixado · sem implícita"});
-  list.push({label:"NTN-F Jan/33", nome:"NTN-F 33", venc:"2033-01-01", taxa:13.86, impl:0, dur:4.96, conv:1, hint:"Prefixado com cupom"});
+  // Prefixados (implícita = 0) — dinâmicos, vindos do robô (com reserva embutida)
+  (MARKET.ltn || []).forEach(r=>{
+    list.push({label:`${r.v} · LTN`, nome:r.v, venc:r.venc,
+      taxa:r.taxa, impl:0, dur:+(+r.du).toFixed(2), conv:1, hint:`Prefixado · sem implícita · taxa ${(+r.taxa).toFixed(2)}%`});
+  });
+  (MARKET.ntnf || []).forEach(r=>{
+    list.push({label:`${r.v} · NTN-F`, nome:r.v, venc:r.venc,
+      taxa:r.taxa, impl:0, dur:+(+r.du).toFixed(2), conv:1, hint:`Prefixado com cupom · taxa ${(+r.taxa).toFixed(2)}%`});
+  });
   return list;
 }
 let PRESETS = presets();
