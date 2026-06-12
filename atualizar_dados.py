@@ -33,7 +33,10 @@ import sys
 import datetime as dt
 from urllib.request import urlopen, Request
 
-# CSV oficial do Tesouro Transparente (lista diária de preços e taxas)
+# Fonte leve (JSON, resposta rápida) — espelho com a mesma estrutura da
+# antiga API do Tesouro Direto (response.TrsrBdTradgList[].TrsrBd).
+TESOURO_JSON = "https://api.radaropcoes.com/bonds.json"
+# Fonte oficial de reserva: CSV diário do Tesouro Transparente (pesado).
 TESOURO_CSV = ("https://www.tesourotransparente.gov.br/ckan/dataset/"
                "df56aa42-484a-4a59-8184-7676580c81e3/resource/"
                "796d2059-14e9-44e3-80c9-2d9e30b405c1/download/"
@@ -41,7 +44,8 @@ TESOURO_CSV = ("https://www.tesourotransparente.gov.br/ckan/dataset/"
 SGS_URL = ("https://api.bcb.gov.br/dados/serie/bcdata.sgs.{cod}/dados/"
            "ultimos/1?formato=json")
 
-TIMEOUT = 180
+TIMEOUT = 30          # fonte leve
+TIMEOUT_CSV = 90      # reserva pesada
 HOJE = dt.date.today()
 
 # cupons (compostos): NTN-B 6% a.a., NTN-F 10% a.a.
@@ -52,9 +56,9 @@ CUPOM_NTNF = (1.10) ** 0.5 - 1.0      # ~4,8809% ao semestre
 # --------------------------------------------------------------------------- #
 # Coleta
 # --------------------------------------------------------------------------- #
-def _get_json(url):
-    req = Request(url, headers={"User-Agent": "carrego-rf-bot/1.0"})
-    with urlopen(req, timeout=TIMEOUT) as r:
+def _get_json(url, timeout=TIMEOUT):
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0 carrego-rf-bot/1.0"})
+    with urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -76,16 +80,46 @@ def _col(header, name):
 
 
 def fetch_tesouro():
+    """Tenta a fonte leve (JSON) e, se falhar, cai no CSV oficial (pesado)."""
+    try:
+        titulos = _fetch_tesouro_json()
+        if len(titulos) >= 3:
+            print(f"  fonte: JSON ({len(titulos)} títulos)")
+            return titulos
+    except Exception as e:
+        print(f"  fonte JSON indisponível ({e}); tentando CSV oficial...")
+    titulos = _fetch_tesouro_csv()
+    print(f"  fonte: CSV oficial ({len(titulos)} títulos)")
+    return titulos
+
+
+def _fetch_tesouro_json():
+    """Fonte leve: JSON no formato TrsrBdTradgList[].TrsrBd."""
+    data = _get_json(TESOURO_JSON, timeout=TIMEOUT)
+    lista = data["response"]["TrsrBdTradgList"]
+    titulos = []
+    for item in lista:
+        b = item.get("TrsrBd", {})
+        nome = b.get("nm", "")
+        venc = (b.get("mtrtyDt") or "")[:10]
+        taxa = b.get("anulInvstmtRate") or b.get("anulRedRate")
+        if not nome or not venc or not taxa:
+            continue
+        titulos.append({"nome": nome, "venc": venc, "taxa": float(taxa)})
+    return titulos
+
+
+def _fetch_tesouro_csv():
     """Baixa o CSV oficial (streaming) e retorna os títulos da data base mais recente.
 
-    Mantém em memória apenas as linhas da última data (a coleta é à prova de
-    qualquer ordenação do arquivo, pois só reinicia ao achar uma data MAIOR).
+    Mantém em memória apenas as linhas da última data (à prova de qualquer
+    ordenação do arquivo, pois só reinicia ao achar uma data MAIOR).
     """
     req = Request(TESOURO_CSV, headers={"User-Agent": "Mozilla/5.0 carrego-rf-bot/1.0"})
     latest = None
     rows = []
     idx = None
-    with urlopen(req, timeout=TIMEOUT) as resp:
+    with urlopen(req, timeout=TIMEOUT_CSV) as resp:
         first = True
         for raw in resp:
             try:
