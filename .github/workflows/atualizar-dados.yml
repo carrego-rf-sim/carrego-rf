@@ -1,0 +1,38 @@
+name: Atualizar dados do Carrego
+
+# Roda em dias úteis ~18:30 (BRT), após o fechamento, e permite execução manual.
+on:
+  schedule:
+    - cron: "30 21 * * 1-5"   # 21:30 UTC = 18:30 horário de Brasília
+  workflow_dispatch:           # botão "Run workflow" na aba Actions
+
+permissions:
+  contents: write              # necessário para o robô commitar o dados.json
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Coletar dados (Tesouro + BACEN)
+        run: python atualizar_dados.py
+
+      - name: Commitar dados.json se mudou
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain dados.json)" ]; then
+            git add dados.json
+            git commit -m "Atualiza dados de mercado ($(date -u +%Y-%m-%d))"
+            git push
+            echo "dados.json atualizado e publicado."
+          else
+            echo "Sem alterações no dados.json."
+          fi
