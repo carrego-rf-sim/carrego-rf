@@ -110,6 +110,11 @@
   table.mx tbody th{position:sticky;left:0;background:var(--panel-2);color:var(--txt);
     font-weight:600;font-size:12px;padding:7px 13px;text-align:left;border-right:1px solid var(--line);z-index:1;min-width:108px}
   table.mx tbody th.zero{color:var(--amber);background:var(--ink-2)}
+  table.mx tbody th .dir{display:block;font-size:9px;font-weight:600;letter-spacing:.3px;margin-top:2px;opacity:.95}
+  table.mx tbody th .dir.abre{color:#e8696b}
+  table.mx tbody th .dir.fecha{color:#63be7b}
+  table.mx tbody th.pos{color:#f2a3a4}
+  table.mx tbody th.neg{color:#9bd6ad}
   table.mx tbody td{padding:7px 9px;font-size:12px;color:#10171c;font-weight:500;border-bottom:1px solid rgba(255,255,255,.04);min-width:62px}
   table.mx tbody td.venc{background:#1b2730!important;color:var(--txt-faint)!important;font-style:italic;font-size:10.5px;font-weight:400}
   table.mx tbody tr:hover td:not(.venc){outline:1.5px solid rgba(11,16,20,.35);outline-offset:-2px}
@@ -250,7 +255,7 @@
         </div>
         <div class="computed">
           <div class="cbox"><div class="k">Dur. Modif.</div><div class="v" id="cDurMod">—</div></div>
-          <div class="cbox alt"><div class="k">Cenários vencidos</div><div class="v" id="cVenc">—</div></div>
+          <div class="cbox alt"><div class="k">Horizonte máx.</div><div class="v" id="cVenc">—</div></div>
         </div>
       </div>
     </div>
@@ -284,6 +289,11 @@
             <div class="lg-item"><span class="sw" style="background:var(--c-mid)"></span>mediana</div>
             <div class="lg-item"><span class="sw" style="background:#1b2730"></span>Vencido</div>
             <div class="lg-item" style="margin-left:auto;color:var(--txt-faint)">passe o mouse numa coluna p/ destacar</div>
+          </div>
+          <div class="legend" style="margin-top:8px;padding-top:10px">
+            <div class="lg-item"><span style="color:#e8696b;font-weight:600">↑ Abertura</span>&nbsp;= juros sobem (variação +), preço cai</div>
+            <div class="lg-item"><span style="color:#63be7b;font-weight:600">↓ Fechamento</span>&nbsp;= juros caem (variação −), preço sobe</div>
+            <div class="lg-item" style="margin-left:auto;color:var(--txt-faint)">amplie o alcance em <b style="color:var(--txt-dim)">Intervalo</b> e <b style="color:var(--txt-dim)">Nº cenários</b></div>
           </div>
 
           <div class="formulas">
@@ -386,7 +396,7 @@ function presets(){
 let PRESETS = presets();
 
 /* ======================= MATEMÁTICA DO CARREGO ======================= */
-const HORIZ = 14; // prazos 1..14 anos
+const HORIZ = 14; // teto de prazos (anos)
 function carrego(impl, taxa, varr, prazo){ return Math.pow((1+impl)*(1+taxa+varr), prazo) - 1; }
 function retorno(impl, taxa, varr, prazo, durmod){
   const c = carrego(impl, taxa, varr, prazo);
@@ -396,6 +406,28 @@ function isVencido(base, venc, prazo){
   const d = new Date(base.getTime());
   d.setDate(d.getDate() + Math.round(360*prazo));
   return d > venc;
+}
+function anosAteVenc(base, venc){
+  return Math.max((venc - base)/(365.25*86400000), 0);
+}
+/* Gera os prazos das colunas adaptados ao tempo até o vencimento:
+   títulos curtos ganham passos menores (meses) para não ficar tudo "Vencido". */
+function buildHorizons(ytm){
+  const cap = Math.min(HORIZ, ytm);
+  if(cap <= 0) return [];
+  let step;
+  if(cap >= 6) step = 1;
+  else if(cap >= 2) step = 0.5;
+  else step = 0.25;
+  const hs = [];
+  for(let h=step; h<=cap+1e-9; h+=step) hs.push(+h.toFixed(2));
+  // inclui o prazo exato até o vencimento se sobrar uma "ponta"
+  if(hs.length===0 || cap - hs[hs.length-1] > 0.08) hs.push(+cap.toFixed(2));
+  return hs;
+}
+function horizonLabel(h){
+  if(h < 1) return Math.round(h*12)+"m";
+  return (Number.isInteger(h) ? h : h.toLocaleString('pt-BR',{maximumFractionDigits:1}))+"a";
 }
 
 /* ======================= ELEMENTOS ======================= */
@@ -457,18 +489,23 @@ function render(){
   const variations = [];
   for(let k=-nrows;k<=nrows;k++) variations.push(k*intv);
 
+  // prazos adaptados ao vencimento do ativo
+  const ytm = anosAteVenc(base, venc);
+  let horizons = buildHorizons(ytm);
+  if(horizons.length === 0) horizons = [0.08]; // ativo praticamente vencido
+
   // build values
   const cells = [];   // {value|null}
   const finite = [];
   variations.forEach(varr=>{
     const line = [];
-    for(let p=1;p<=HORIZ;p++){
+    horizons.forEach(p=>{
       if(isVencido(base,venc,p)){ line.push(null); }
       else{
         const val = MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod);
         line.push(val); finite.push(val);
       }
-    }
+    });
     cells.push(line);
   });
 
@@ -477,29 +514,33 @@ function render(){
   els.scMin.textContent = pct(mn,1);
   els.scMax.textContent = pct(mx,1);
 
-  // count vencidos columns (fully vencido)
-  let vencCols=0;
-  for(let p=1;p<=HORIZ;p++){ if(isVencido(base,venc,p)) vencCols++; }
-  els.cvenc.textContent = vencCols+" / "+HORIZ;
+  // horizonte máximo exibido
+  els.cvenc.textContent = horizons.length ? horizonLabel(horizons[horizons.length-1]) : "—";
 
   // header
   let html = "<thead><tr><th class='corner'>Variação ▾ &nbsp; Prazo ▸</th>";
-  for(let p=1;p<=HORIZ;p++){ html+=`<th data-col='${p}'>${p}<span class='yr'>ano${p>1?'s':''}</span></th>`; }
+  horizons.forEach((p,ci)=>{ html+=`<th data-col='${ci}'>${horizonLabel(p)}<span class='yr'>${p<1?'prazo':(p>1?'anos':'ano')}</span></th>`; });
   html+="</tr></thead><tbody>";
 
-  const header = ["Variação"]; for(let p=1;p<=HORIZ;p++) header.push(p+"a");
+  const header = ["Variação", ...horizons.map(horizonLabel)];
   const csvRows=[];
 
+  const nv = variations.length;
   variations.forEach((varr,ri)=>{
     const zero = Math.abs(varr)<1e-9;
+    const cls = zero ? 'zero' : (varr>0 ? 'pos' : 'neg');
     const lbl = (varr>0?"+":"")+(varr*100).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+"%";
-    html+=`<tr><th class='${zero?'zero':''}'>${lbl}</th>`;
+    // rótulo de direção nas pontas: topo = fechamento (taxa cai), base = abertura (taxa sobe)
+    let dir = "";
+    if(ri===0) dir = "<span class='dir fecha'>↓ FECHAMENTO</span>";
+    else if(ri===nv-1) dir = "<span class='dir abre'>↑ ABERTURA</span>";
+    html+=`<tr><th class='${cls}'>${lbl}${dir}</th>`;
     const csv=[lbl];
     cells[ri].forEach((val,ci)=>{
-      if(val===null){ html+=`<td class='venc' data-col='${ci+1}'>Vencido</td>`; csv.push("Vencido"); }
+      if(val===null){ html+=`<td class='venc' data-col='${ci}'>Vencido</td>`; csv.push("Vencido"); }
       else{
         const bg = scaleColor(val,mn,md,mx);
-        html+=`<td data-col='${ci+1}' style='background:${bg}'>${pct(val)}</td>`;
+        html+=`<td data-col='${ci}' style='background:${bg}'>${pct(val)}</td>`;
         csv.push((val*100).toFixed(2).replace('.',','));
       }
     });
