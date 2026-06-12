@@ -272,21 +272,30 @@ def implicita(venc, taxa_real, pts_nominal):
 def montar(titulos, selic, cdi):
     pts_nom = curva_nominal(titulos)
     ntnb = {}
+    ltn = {}
+    ntnf = {}
     for t in titulos:
         c = classifica(t["nome"])
-        if c not in ("ntnb_cup", "ntnb_prin"):
-            continue
         venc = t["venc"]
-        lbl = vertice_label(venc)
-        cupom = CUPOM_NTNB if c == "ntnb_cup" else 0.0
-        du = round(macaulay(venc, t["taxa"], cupom), 2)
-        impl = implicita(venc, t["taxa"], pts_nom)
-        if lbl not in ntnb or c == "ntnb_cup":
-            ntnb[lbl] = {
-                "v": lbl, "venc": venc,
-                "anbima": round(t["taxa"], 4), "expect": round(t["taxa"], 4),
-                "du": du, "impl": impl,
-            }
+        ano = venc[:4]
+        if c in ("ntnb_cup", "ntnb_prin"):
+            lbl = vertice_label(venc)
+            cupom = CUPOM_NTNB if c == "ntnb_cup" else 0.0
+            du = round(macaulay(venc, t["taxa"], cupom), 2)
+            impl = implicita(venc, t["taxa"], pts_nom)
+            if lbl not in ntnb or c == "ntnb_cup":
+                ntnb[lbl] = {"v": lbl, "venc": venc,
+                             "anbima": round(t["taxa"], 4), "expect": round(t["taxa"], 4),
+                             "du": du, "impl": impl}
+        elif c == "ltn":
+            du = round(macaulay(venc, t["taxa"], 0.0), 2)   # zero cupom
+            ltn[venc] = {"v": f"LTN {ano}", "venc": venc,
+                         "taxa": round(t["taxa"], 4), "du": du}
+        elif c == "ntnf":
+            du = round(macaulay(venc, t["taxa"], CUPOM_NTNF), 2)
+            ntnf[venc] = {"v": f"NTN-F {ano}", "venc": venc,
+                          "taxa": round(t["taxa"], 4), "du": du}
+
     curva = sorted(ntnb.values(), key=lambda r: r["venc"])
     return {
         "date": HOJE.strftime("%d/%m/%Y"),
@@ -295,6 +304,8 @@ def montar(titulos, selic, cdi):
         "fonte": "Tesouro Transparente + BACEN",
         "atualizado_em": dt.datetime.now().isoformat(timespec="seconds"),
         "ntnb": curva,
+        "ltn": sorted(ltn.values(), key=lambda r: r["venc"]),
+        "ntnf": sorted(ntnf.values(), key=lambda r: r["venc"]),
     }
 
 
