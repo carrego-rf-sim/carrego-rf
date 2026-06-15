@@ -49,7 +49,7 @@ FOCUS_URL = ("https://olinda.bcb.gov.br/olinda/servico/Expectativas/"
              "versao/v1/odata/ExpectativasMercadoAnuais")
 
 TIMEOUT = 30          # fonte leve
-TIMEOUT_CSV = 90      # reserva pesada
+TIMEOUT_CSV = 120     # reserva pesada (CSV grande do Tesouro)
 HOJE = dt.date.today()
 
 # cupons (compostos): NTN-B 6% a.a., NTN-F 10% a.a.
@@ -84,17 +84,24 @@ def _col(header, name):
 
 
 def fetch_tesouro():
-    """Tenta a fonte leve (JSON) e, se falhar, cai no CSV oficial (pesado)."""
-    try:
-        titulos = _fetch_tesouro_json()
-        if len(titulos) >= 3:
-            print(f"  fonte: JSON ({len(titulos)} títulos)")
-            return titulos
-    except Exception as e:
-        print(f"  fonte JSON indisponível ({e}); tentando CSV oficial...")
-    titulos = _fetch_tesouro_csv()
-    print(f"  fonte: CSV oficial ({len(titulos)} títulos)")
-    return titulos
+    """Tenta a fonte leve (JSON) com retentativas e, se falhar, o CSV oficial."""
+    for tent in range(2):
+        try:
+            titulos = _fetch_tesouro_json()
+            if len(titulos) >= 3:
+                print(f"  fonte: JSON ({len(titulos)} títulos)")
+                return titulos
+        except Exception as e:
+            print(f"  JSON tentativa {tent+1}/2 falhou ({e})")
+    for tent in range(3):
+        try:
+            titulos = _fetch_tesouro_csv()
+            if len(titulos) >= 3:
+                print(f"  fonte: CSV oficial ({len(titulos)} títulos)")
+                return titulos
+        except Exception as e:
+            print(f"  CSV tentativa {tent+1}/3 falhou ({e})")
+    raise RuntimeError("Tesouro indisponível (JSON e CSV falharam)")
 
 
 def _fetch_tesouro_json():
@@ -347,14 +354,20 @@ def montar(titulos, selic, cdi, focus=None):
 
 
 def main():
-    titulos = fetch_tesouro()
+    try:
+        titulos = fetch_tesouro()
+    except Exception as e:
+        print(f"AVISO: dados do Tesouro indisponíveis agora ({e}). "
+              f"Mantendo o dados.json anterior — nada foi sobrescrito.")
+        return   # termina verde; preserva o último dado bom
     selic = fetch_bacen(432, 14.40)     # Meta Selic % a.a.
     cdi = fetch_bacen(4389, selic)      # CDI a.a. base 252
     focus = fetch_focus()               # projeções anuais Selic/IPCA
     saida = montar(titulos, selic, cdi, focus)
     if len(saida["ntnb"]) < 3:
-        raise SystemExit(f"ERRO: poucos vértices NTN-B coletados "
-                         f"({len(saida['ntnb'])}); nada gravado.")
+        print(f"AVISO: poucos vértices NTN-B ({len(saida['ntnb'])}); "
+              f"mantendo o dados.json anterior.")
+        return
     with open("dados.json", "w", encoding="utf-8") as f:
         json.dump(saida, f, ensure_ascii=False, indent=2)
     nf = len(saida["focus"].get("selic", {}))
