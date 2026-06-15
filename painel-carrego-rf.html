@@ -249,8 +249,9 @@
         <div class="field">
           <label class="lbl">Exibir</label>
           <div class="seg" id="modeSeg">
-            <button data-mode="retorno" class="on">Retorno de mercado</button>
-            <button data-mode="carrego">Carrego puro</button>
+            <button data-mode="retorno" class="on" title="Retorno de mercado (carrego + marcação)">Retorno</button>
+            <button data-mode="carrego" title="Carrego puro (sem marcação)">Carrego</button>
+            <button data-mode="cdi" title="Retorno como % do CDI projetado (Focus)">% do CDI</button>
           </div>
         </div>
         <div class="computed">
@@ -376,7 +377,12 @@ let MARKET = {
     {v:"NTN-F 2031", venc:"2031-01-01", taxa:14.06, du:3.58},
     {v:"NTN-F 2033", venc:"2033-01-01", taxa:14.13, du:4.62},
     {v:"NTN-F 2035", venc:"2035-01-01", taxa:14.13, du:5.42},
-  ]
+  ],
+  // Projeções do Focus (reserva; o robô sobrescreve). ano -> % a.a.
+  focus: {
+    selic: {"2026":14.75,"2027":12.50,"2028":10.75,"2029":10.00,"2030":10.00},
+    ipca:  {"2026":4.90,"2027":4.20,"2028":3.80,"2029":3.50,"2030":3.50}
+  }
 };
 const ntnbByVertex = () => Object.fromEntries(MARKET.ntnb.map(r=>[r.v,r]));
 
@@ -427,6 +433,38 @@ function isVencido(base, venc, prazo){
 function anosAteVenc(base, venc){
   return Math.max((venc - base)/(365.25*86400000), 0);
 }
+/* ---- Projeções do Focus: caminho ano a ano de CDI (Selic) e IPCA ---- */
+function focusPath(map, base, n){
+  if(!map) return null;
+  const anos = Object.keys(map).map(Number).sort((a,b)=>a-b);
+  if(anos.length===0) return null;
+  const y0 = base.getFullYear();
+  const out = [];
+  for(let i=0;i<n;i++){
+    const y = y0+i;
+    let v;
+    if(map[y]!=null) v = map[y];
+    else if(y < anos[0]) v = map[anos[0]];
+    else v = map[anos[anos.length-1]];   // achata a ponta (estável adiante)
+    out.push(v/100);
+  }
+  return out;
+}
+function accumFactor(path, T){
+  if(!path) return null;
+  let f=1, t=0;
+  while(t < T-1e-9){
+    const i = Math.min(Math.floor(t+1e-9), path.length-1);
+    const step = Math.min(1, T-t);
+    f *= Math.pow(1+path[i], step);
+    t += step;
+  }
+  return f;
+}
+function temFocus(){ return MARKET.focus && MARKET.focus.selic && Object.keys(MARKET.focus.selic).length>0; }
+function cdiAcum(base, T){ const f=accumFactor(focusPath(MARKET.focus&&MARKET.focus.selic, base, 16), T); return f==null?null:f-1; }
+function ipcaMedio(base, T){ const f=accumFactor(focusPath(MARKET.focus&&MARKET.focus.ipca, base, 16), T); return f==null?null:Math.pow(f,1/Math.max(T,1e-6))-1; }
+
 /* Gera os prazos das colunas adaptados ao tempo até o vencimento:
    títulos curtos ganham passos menores (meses) para não ficar tudo "Vencido". */
 function buildHorizons(ytm){
@@ -501,6 +539,14 @@ function render(){
   els.durmod.textContent = durmod.toFixed(3);
   els.mxName.textContent = els.nome.value || "Ativo";
   els.mxSub.innerHTML = `Taxa op. <b>${pct(taxa)}</b> · Implícita <b>${pct(impl)}</b> · Duration <b>${dur.toFixed(2)}</b> · Dur. modif. <b>${durmod.toFixed(2)}</b> · venc. <b>${els.venc.value||"—"}</b>`;
+  if(MODE==="cdi" && temFocus()){
+    const cdi5=cdiAcum(base,5), ipca5=ipcaMedio(base,5);
+    const ann5 = cdi5!=null ? Math.pow(1+cdi5,1/5)-1 : null;
+    els.mxSub.innerHTML += `<br><span style="color:var(--teal)">Comparado ao CDI projetado (Focus)</span>` +
+      (ann5!=null?` · CDI ~<b>${pct(ann5,1)}</b>/ano (5a)`:``) +
+      (impl>0 && ipca5!=null?` · NTN-B usa IPCA Focus ~<b>${pct(ipca5,1)}</b>`:``) +
+      ` · <b>100% = empata com o CDI</b>`;
+  }
 
   // variações: do mais negativo (topo) ao mais positivo (base), igual à planilha
   const variations = [];
@@ -519,7 +565,17 @@ function render(){
     horizons.forEach(p=>{
       if(isVencido(base,venc,p)){ line.push(null); }
       else{
-        const val = MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod);
+        let val;
+        if(MODE==="cdi"){
+          const cdiR = cdiAcum(base, p);
+          if(cdiR==null || cdiR<=0){ val=null; }
+          else {
+            const implCdi = impl>0 ? (ipcaMedio(base,p)||0) : 0;  // NTN-B usa IPCA do Focus
+            val = retorno(implCdi, taxa, varr, p, durmod) / cdiR;  // 1,0 = 100% do CDI
+          }
+        } else {
+          val = MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod);
+        }
         line.push(val); finite.push(val);
       }
     });
@@ -528,6 +584,10 @@ function render(){
 
   let mn=Math.min(...finite), mx=Math.max(...finite), md=median(finite);
   if(!isFinite(mn)){mn=0;mx=0;md=0;}
+  if(MODE==="cdi" && isFinite(mn)){
+    md=1.0;                          // 100% do CDI = ponto neutro (amarelo)
+    mn=Math.min(mn, 0.999); mx=Math.max(mx, 1.001);   // garante vermelho<100<verde
+  }
   els.scMin.textContent = pct(mn,1);
   els.scMax.textContent = pct(mx,1);
 
@@ -684,7 +744,7 @@ lockFields();     // trava tudo menos a Taxa operação
    Se não existir (ex.: aberto como arquivo local), mantém o fechamento embarcado. */
 (async function loadLiveData(){
   try{
-    const resp = await fetch("dados.json", {cache:"no-store"});
+    const resp = await fetch("dados.json?v=" + Date.now(), {cache:"no-store"});
     if(!resp.ok) throw new Error("sem dados.json");
     const data = await resp.json();
     if(!data || !Array.isArray(data.ntnb) || data.ntnb.length < 5) throw new Error("formato inválido");
