@@ -32,6 +32,7 @@ import json
 import sys
 import datetime as dt
 from urllib.request import urlopen, Request
+from urllib.parse import quote
 
 # Fonte leve (JSON, resposta rápida) — espelho com a mesma estrutura da
 # antiga API do Tesouro Direto (response.TrsrBdTradgList[].TrsrBd).
@@ -43,6 +44,9 @@ TESOURO_CSV = ("https://www.tesourotransparente.gov.br/ckan/dataset/"
                "precotaxatesourodireto.csv")
 SGS_URL = ("https://api.bcb.gov.br/dados/serie/bcdata.sgs.{cod}/dados/"
            "ultimos/1?formato=json")
+# Focus (expectativas anuais): Selic e IPCA por ano de referência
+FOCUS_URL = ("https://olinda.bcb.gov.br/olinda/servico/Expectativas/"
+             "versao/v1/odata/ExpectativasMercadoAnuais")
 
 TIMEOUT = 30          # fonte leve
 TIMEOUT_CSV = 90      # reserva pesada
@@ -183,6 +187,35 @@ def fetch_bacen(cod, default):
         return default
 
 
+def fetch_focus():
+    """Projeções anuais do Focus (mediana) p/ Selic e IPCA, por ano de referência.
+    Pega a divulgação mais recente (baseCalculo=0). Falha silenciosa -> {}."""
+    try:
+        flt = "(Indicador eq 'Selic' or Indicador eq 'IPCA') and baseCalculo eq 0"
+        url = (FOCUS_URL + "?$format=json"
+               "&$select=Indicador,DataReferencia,Mediana,Data"
+               "&$orderby=Data desc&$top=4000"
+               "&$filter=" + quote(flt))
+        data = _get_json(url, timeout=TIMEOUT)
+        best = {}   # (indicador, ano) -> (Data, Mediana) mais recente
+        for r in data.get("value", []):
+            ind = r.get("Indicador")
+            ano = str(r.get("DataReferencia", ""))[:4]
+            med = r.get("Mediana")
+            d = r.get("Data", "")
+            if ind not in ("Selic", "IPCA") or not ano.isdigit() or med is None:
+                continue
+            k = (ind, ano)
+            if k not in best or d > best[k][0]:
+                best[k] = (d, float(med))
+        selic = {a: v for (i, a), (d, v) in best.items() if i == "Selic"}
+        ipca = {a: v for (i, a), (d, v) in best.items() if i == "IPCA"}
+        return {"selic": selic, "ipca": ipca}
+    except Exception as e:
+        print(f"  Focus indisponível ({e}); seguindo sem projeção.")
+        return {"selic": {}, "ipca": {}}
+
+
 # --------------------------------------------------------------------------- #
 # Classificação dos títulos
 # --------------------------------------------------------------------------- #
@@ -269,7 +302,7 @@ def implicita(venc, taxa_real, pts_nominal):
 # --------------------------------------------------------------------------- #
 # Montagem do dados.json
 # --------------------------------------------------------------------------- #
-def montar(titulos, selic, cdi):
+def montar(titulos, selic, cdi, focus=None):
     pts_nom = curva_nominal(titulos)
     ntnb = {}
     ltn = {}
@@ -306,6 +339,7 @@ def montar(titulos, selic, cdi):
         "ntnb": curva,
         "ltn": sorted(ltn.values(), key=lambda r: r["venc"]),
         "ntnf": sorted(ntnf.values(), key=lambda r: r["venc"]),
+        "focus": focus or {"selic": {}, "ipca": {}},
     }
 
 
@@ -313,14 +347,16 @@ def main():
     titulos = fetch_tesouro()
     selic = fetch_bacen(432, 14.40)     # Meta Selic % a.a.
     cdi = fetch_bacen(4389, selic)      # CDI a.a. base 252
-    saida = montar(titulos, selic, cdi)
+    focus = fetch_focus()               # projeções anuais Selic/IPCA
+    saida = montar(titulos, selic, cdi, focus)
     if len(saida["ntnb"]) < 3:
         raise SystemExit(f"ERRO: poucos vértices NTN-B coletados "
                          f"({len(saida['ntnb'])}); nada gravado.")
     with open("dados.json", "w", encoding="utf-8") as f:
         json.dump(saida, f, ensure_ascii=False, indent=2)
+    nf = len(saida["focus"].get("selic", {}))
     print(f"OK: {len(saida['ntnb'])} vértices · {saida['date']} · "
-          f"Selic {saida['selic']} · CDI {saida['cdi']}")
+          f"Selic {saida['selic']} · CDI {saida['cdi']} · Focus {nf} anos")
 
 
 # --------------------------------------------------------------------------- #
