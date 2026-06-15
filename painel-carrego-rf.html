@@ -398,12 +398,14 @@ function presets(){
     list.push({label:`${r.v} · Cuponada`, nome:`${r.v} Cuponada`, venc:r.venc,
       taxa: r.expect, impl:r.impl, dur:+r.du.toFixed(2), conv:1, hint:`Implícita ${r.impl.toFixed(2)}% · Anbima ${r.expect.toFixed(2)}%`});
   });
-  // NTN-B principais
+  // NTN-B principais (zero cupom): duration = prazo até o vencimento
+  const hojeRef = new Date();
   ["NTN-B 35","NTN-B 40","NTN-B 45","NTN-B 50","NTN-B 60"].forEach(v=>{
     const r=m[v];
     if(!r) return;
+    const durPrin = +anosAteVenc(hojeRef, new Date(r.venc+"T00:00:00")).toFixed(2);
     list.push({label:`${v} · Principal`, nome:`${v} Principal`, venc:r.venc,
-      taxa:r.expect, impl:r.impl, dur:+r.du.toFixed(2), conv:1, hint:`Zero cupom · implícita ${r.impl.toFixed(2)}%`});
+      taxa:r.expect, impl:r.impl, dur:durPrin, conv:1, hint:`Zero cupom · duration ≈ prazo (${durPrin}a)`});
   });
   // Prefixados (implícita = 0) — dinâmicos, vindos do robô (com reserva embutida)
   (MARKET.ltn || []).forEach(r=>{
