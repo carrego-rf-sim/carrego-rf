@@ -189,21 +189,24 @@ def fetch_bacen(cod, default):
 
 def fetch_focus():
     """Projeções anuais do Focus (mediana) p/ Selic e IPCA, por ano de referência.
-    Pega a divulgação mais recente (baseCalculo=0). Falha silenciosa -> {}."""
+    Sem $filter (que dava problema de codificação): baixa as linhas mais recentes
+    e filtra no Python. Pega a divulgação mais recente. Falha silenciosa -> {}."""
     try:
-        flt = "(Indicador eq 'Selic' or Indicador eq 'IPCA') and baseCalculo eq 0"
-        url = (FOCUS_URL + "?$format=json"
-               "&$select=Indicador,DataReferencia,Mediana,Data"
-               "&$orderby=Data desc&$top=4000"
-               "&$filter=" + quote(flt))
-        data = _get_json(url, timeout=TIMEOUT)
+        url = (FOCUS_URL + "?$format=json&$top=4000"
+               "&$orderby=Data%20desc"
+               "&$select=Indicador,DataReferencia,Mediana,Data,baseCalculo")
+        data = _get_json(url, timeout=45)
         best = {}   # (indicador, ano) -> (Data, Mediana) mais recente
         for r in data.get("value", []):
             ind = r.get("Indicador")
+            if ind not in ("Selic", "IPCA"):
+                continue
+            if r.get("baseCalculo") not in (0, "0", None):
+                continue
             ano = str(r.get("DataReferencia", ""))[:4]
             med = r.get("Mediana")
             d = r.get("Data", "")
-            if ind not in ("Selic", "IPCA") or not ano.isdigit() or med is None:
+            if not ano.isdigit() or med is None:
                 continue
             k = (ind, ano)
             if k not in best or d > best[k][0]:
