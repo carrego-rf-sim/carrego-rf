@@ -748,7 +748,11 @@ lockFields();     // trava tudo menos a Taxa operação
     if(!resp.ok) throw new Error("sem dados.json");
     const data = await resp.json();
     if(!data || !Array.isArray(data.ntnb) || data.ntnb.length < 5) throw new Error("formato inválido");
+    const focusReserva = MARKET.focus;   // guarda a reserva antes de trocar
     MARKET = Object.assign({fonte:"Tesouro Direto"}, data);
+    if(!MARKET.focus || !MARKET.focus.selic || Object.keys(MARKET.focus.selic).length===0){
+      MARKET.focus = focusReserva;       // dados.json sem Focus -> usa a reserva embutida
+    }
     PRESETS = presets();
     const cur = els.preset.value || 8;
     fillPresets();
