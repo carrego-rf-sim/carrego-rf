@@ -261,6 +261,13 @@
             <button data-src="itau" title="Casa do Itaú — atualização mensal manual">Itaú</button>
           </div>
         </div>
+        <div class="field">
+          <label class="lbl">Aquisição</label>
+          <div class="seg" id="custSeg">
+            <button data-cust="off" class="on" title="Mercado secundário / tesouraria — sem taxa de custódia">Tesouraria</button>
+            <button data-cust="on" title="Tesouro Direto — com taxa de custódia B3 de 0,20% a.a.">Tesouro Direto</button>
+          </div>
+        </div>
         <div class="computed">
           <div class="cbox"><div class="k">Dur. Modif.</div><div class="v" id="cDurMod">—</div></div>
           <div class="cbox alt"><div class="k">Horizonte máx.</div><div class="v" id="cVenc">—</div></div>
@@ -312,6 +319,7 @@
             <div class="fline"><span class="fname">CDI projetado · Focus</span><span class="feq">mediana das expectativas de mercado (BACEN, ~130 instituições); usa a Selic projetada ano a ano (CDI ≈ Selic), repetindo o último ano adiante</span></div>
             <div class="fline"><span class="fname">CDI projetado · Itaú</span><span class="feq">projeção da casa do Itaú (relatório Brasil Longo Prazo); usa o CDI acumulado por ano, repetindo o último ano adiante</span></div>
             <div class="fline"><span class="fname">% do CDI · NTN-B</span><span class="feq">como é indexada ao IPCA, o retorno nominal usa a inflação projetada (IPCA do Focus ou do Itaú, conforme a fonte) — por isso não dá 100% automático</span></div>
+            <div class="fline"><span class="fname">Custódia (Tesouro Direto)</span><span class="feq">aplica arrasto de 0,20% a.a. da B3: Retorno líquido = (1 + Retorno) · (1 − 0,20%)<sup>prazo</sup> − 1. Via tesouraria/mercado secundário não há essa taxa</span></div>
           </div>
         </div>
       </div>
@@ -519,6 +527,13 @@ const els = {
   scMin:$("scMin"), scMax:$("scMax")
 };
 let MODE = "retorno";
+const CUSTODIA = 0.0020;      // taxa de custódia B3 = 0,20% a.a.
+let CUSTODIA_ON = false;      // false = Tesouraria (s/ custódia) · true = Tesouro Direto
+// aplica o arrasto da custódia sobre um retorno acumulado, conforme o prazo (anos)
+function comCustodia(ret, prazo){
+  if(!CUSTODIA_ON || ret==null) return ret;
+  return (1+ret)*Math.pow(1-CUSTODIA, prazo) - 1;
+}
 
 /* fill preset dropdown */
 function fillPresets(){
@@ -563,6 +578,9 @@ function render(){
   els.durmod.textContent = durmod.toFixed(3);
   els.mxName.textContent = els.nome.value || "Ativo";
   els.mxSub.innerHTML = `Taxa op. <b>${pct(taxa)}</b> · Implícita <b>${pct(impl)}</b> · Duration <b>${dur.toFixed(2)}</b> · Dur. modif. <b>${durmod.toFixed(2)}</b> · venc. <b>${els.venc.value||"—"}</b>`;
+  if(CUSTODIA_ON){
+    els.mxSub.innerHTML += ` · <span style="color:var(--amber)">líquido de custódia 0,20% a.a. (Tesouro Direto)</span>`;
+  }
   if(MODE==="cdi" && temProj()){
     const cdi5=cdiAcum(base,5), ipca5=ipcaMedio(base,5);
     const ann5 = cdi5!=null ? Math.pow(1+cdi5,1/5)-1 : null;
@@ -596,10 +614,12 @@ function render(){
           if(cdiR==null || cdiR<=0){ val=null; }
           else {
             const implCdi = impl>0 ? (ipcaMedio(base,p)||0) : 0;  // NTN-B usa IPCA do Focus
-            val = retorno(implCdi, taxa, varr, p, durmod) / cdiR;  // 1,0 = 100% do CDI
+            const retAtivo = comCustodia(retorno(implCdi, taxa, varr, p, durmod), p);
+            val = retAtivo / cdiR;  // 1,0 = 100% do CDI
           }
         } else {
-          val = MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod);
+          const bruto = MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod);
+          val = comCustodia(bruto, p);
         }
         line.push(val); finite.push(val);
       }
@@ -746,6 +766,12 @@ document.querySelectorAll("#srcSeg button").forEach(b=>{
   b.addEventListener("click",()=>{
     document.querySelectorAll("#srcSeg button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on"); CDISRC=b.dataset.src; render();
+  });
+});
+document.querySelectorAll("#custSeg button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#custSeg button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); CUSTODIA_ON=(b.dataset.cust==="on"); render();
   });
 });
 $("btnCsv").addEventListener("click",exportCsv);
