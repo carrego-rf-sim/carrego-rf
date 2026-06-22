@@ -268,6 +268,13 @@
             <button data-cust="on" title="Tesouro Direto — com taxa de custódia B3 de 0,20% a.a.">Tesouro Direto</button>
           </div>
         </div>
+        <div class="field">
+          <label class="lbl">Rentabilidade</label>
+          <div class="seg" id="irSeg">
+            <button data-ir="off" class="on" title="Sem desconto de imposto de renda">Bruta</button>
+            <button data-ir="on" title="Líquida de IR (tabela regressiva por prazo)">Líquida (IR)</button>
+          </div>
+        </div>
         <div class="computed">
           <div class="cbox"><div class="k">Dur. Modif.</div><div class="v" id="cDurMod">—</div></div>
           <div class="cbox alt"><div class="k">Horizonte máx.</div><div class="v" id="cVenc">—</div></div>
@@ -320,6 +327,8 @@
             <div class="fline"><span class="fname">CDI projetado · Itaú</span><span class="feq">projeção da casa do Itaú (relatório Brasil Longo Prazo); usa o CDI acumulado por ano, repetindo o último ano adiante</span></div>
             <div class="fline"><span class="fname">% do CDI · NTN-B</span><span class="feq">como é indexada ao IPCA, o retorno nominal usa a inflação projetada (IPCA do Focus ou do Itaú, conforme a fonte) — por isso não dá 100% automático</span></div>
             <div class="fline"><span class="fname">Custódia (Tesouro Direto)</span><span class="feq">aplica arrasto de 0,20% a.a. da B3: Retorno líquido = (1 + Retorno) · (1 − 0,20%)<sup>prazo</sup> − 1. Via tesouraria/mercado secundário não há essa taxa</span></div>
+            <div class="fline"><span class="fname">IR · tabela regressiva</span><span class="feq">22,5% (≤180d) · 20% (181–360d) · 17,5% (361–720d) · 15% (&gt;720d), aplicada por prazo (coluna). Incide só sobre o ganho; custódia não abate a base</span></div>
+            <div class="fline"><span class="fname">IR · cupons (NTN-F / NTN-B cup.)</span><span class="feq">cada cupom é tributado na sua data, pela alíquota do tempo decorrido (cupons iniciais pagam mais que 15%); o ganho de preço é tributado pela alíquota do prazo</span></div>
           </div>
         </div>
       </div>
@@ -420,7 +429,7 @@ function presets(){
   MARKET.ntnb.forEach(r=>{
     if(r.v==="NTN-B 26") return;
     list.push({label:`${r.v} · Cuponada`, nome:`${r.v} Cuponada`, venc:r.venc,
-      taxa: r.expect, impl:r.impl, dur:+r.du.toFixed(2), conv:1, hint:`Implícita ${r.impl.toFixed(2)}% · Anbima ${r.expect.toFixed(2)}%`});
+      taxa: r.expect, impl:r.impl, dur:+r.du.toFixed(2), conv:1, cupom:0.06, hint:`Implícita ${r.impl.toFixed(2)}% · Anbima ${r.expect.toFixed(2)}%`});
   });
   // NTN-B principais (zero cupom): duration = prazo até o vencimento
   const hojeRef = new Date();
@@ -429,16 +438,16 @@ function presets(){
     if(!r) return;
     const durPrin = +anosAteVenc(hojeRef, new Date(r.venc+"T00:00:00")).toFixed(2);
     list.push({label:`${v} · Principal`, nome:`${v} Principal`, venc:r.venc,
-      taxa:r.expect, impl:r.impl, dur:durPrin, conv:1, hint:`Zero cupom · duration ≈ prazo (${durPrin}a)`});
+      taxa:r.expect, impl:r.impl, dur:durPrin, conv:1, cupom:0, hint:`Zero cupom · duration ≈ prazo (${durPrin}a)`});
   });
   // Prefixados (implícita = 0) — dinâmicos, vindos do robô (com reserva embutida)
   (MARKET.ltn || []).forEach(r=>{
     list.push({label:`${r.v} · LTN`, nome:r.v, venc:r.venc,
-      taxa:r.taxa, impl:0, dur:+(+r.du).toFixed(2), conv:1, hint:`Prefixado · sem implícita · taxa ${(+r.taxa).toFixed(2)}%`});
+      taxa:r.taxa, impl:0, dur:+(+r.du).toFixed(2), conv:1, cupom:0, hint:`Prefixado · sem implícita · taxa ${(+r.taxa).toFixed(2)}%`});
   });
   (MARKET.ntnf || []).forEach(r=>{
     list.push({label:`${r.v} · NTN-F`, nome:r.v, venc:r.venc,
-      taxa:r.taxa, impl:0, dur:+(+r.du).toFixed(2), conv:1, hint:`Prefixado com cupom · taxa ${(+r.taxa).toFixed(2)}%`});
+      taxa:r.taxa, impl:0, dur:+(+r.du).toFixed(2), conv:1, cupom:0.10, hint:`Prefixado com cupom · taxa ${(+r.taxa).toFixed(2)}%`});
   });
   return list;
 }
@@ -534,6 +543,36 @@ function comCustodia(ret, prazo){
   if(!CUSTODIA_ON || ret==null) return ret;
   return (1+ret)*Math.pow(1-CUSTODIA, prazo) - 1;
 }
+let IR_ON = false;
+let ACTIVE_CUPOM = 0;   // cupom a.a. do ativo selecionado (0 = zero cupom)           // false = Bruta · true = Líquida (IR)
+// tabela regressiva de IR de renda fixa, por prazo em anos (dias corridos)
+function aliqIR(prazoAnos){
+  const dias = prazoAnos * 365;
+  if(dias <= 180) return 0.225;
+  if(dias <= 360) return 0.20;
+  if(dias <= 720) return 0.175;
+  return 0.15;
+}
+// IR como fração do investido. Ganho de preço na alíquota do prazo + cupons na alíquota de cada pagamento.
+function irAmount(retBruto, prazo, cupom, impl){
+  if(retBruto==null) return 0;
+  const aT = aliqIR(prazo);
+  let ir = aT * retBruto;                       // base: tudo na alíquota do prazo
+  if(cupom > 0){                                // correção de timing dos cupons (semestrais)
+    const cs = Math.pow(1+cupom, 0.5) - 1;      // cupom semestral
+    for(let t=0.5; t<=prazo+1e-9; t+=0.5){
+      const cupNom = impl>0 ? cs*Math.pow(1+impl, t) : cs;   // NTN-B: nominaliza pela implícita
+      ir += (aliqIR(t) - aT) * cupNom;
+    }
+  }
+  return ir;
+}
+// retorno líquido = (bruto já com custódia) − IR sobre o ganho bruto (custódia não abate base do IR)
+function liquido(retBruto, prazo, cupom, impl){
+  const comCust = comCustodia(retBruto, prazo);
+  if(!IR_ON || retBruto==null) return comCust;
+  return comCust - irAmount(retBruto, prazo, cupom, impl);
+}
 
 /* fill preset dropdown */
 function fillPresets(){
@@ -548,6 +587,7 @@ function applyPreset(i){
   els.dur.value = p.dur;
   els.conv.value = p.conv;
   els.presetHint.textContent = p.hint || "";
+  ACTIVE_CUPOM = p.cupom || 0;
   render();
 }
 
@@ -580,6 +620,9 @@ function render(){
   els.mxSub.innerHTML = `Taxa op. <b>${pct(taxa)}</b> · Implícita <b>${pct(impl)}</b> · Duration <b>${dur.toFixed(2)}</b> · Dur. modif. <b>${durmod.toFixed(2)}</b> · venc. <b>${els.venc.value||"—"}</b>`;
   if(CUSTODIA_ON){
     els.mxSub.innerHTML += ` · <span style="color:var(--amber)">líquido de custódia 0,20% a.a. (Tesouro Direto)</span>`;
+  }
+  if(IR_ON){
+    els.mxSub.innerHTML += ` · <span style="color:var(--amber)">líquido de IR (tabela regressiva)</span>`;
   }
   if(MODE==="cdi" && temProj()){
     const cdi5=cdiAcum(base,5), ipca5=ipcaMedio(base,5);
@@ -614,12 +657,14 @@ function render(){
           if(cdiR==null || cdiR<=0){ val=null; }
           else {
             const implCdi = impl>0 ? (ipcaMedio(base,p)||0) : 0;  // NTN-B usa IPCA do Focus
-            const retAtivo = comCustodia(retorno(implCdi, taxa, varr, p, durmod), p);
-            val = retAtivo / cdiR;  // 1,0 = 100% do CDI
+            const retAtivo = liquido(retorno(implCdi, taxa, varr, p, durmod), p, ACTIVE_CUPOM, impl);
+            // benchmark CDI também líquido de IR quando aplicável (mantém comparação justa)
+            const cdiCmp = IR_ON ? cdiR*(1-aliqIR(p)) : cdiR;
+            val = retAtivo / cdiCmp;  // 1,0 = 100% do CDI
           }
         } else {
           const bruto = MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod);
-          val = comCustodia(bruto, p);
+          val = liquido(bruto, p, ACTIVE_CUPOM, impl);
         }
         line.push(val); finite.push(val);
       }
@@ -772,6 +817,12 @@ document.querySelectorAll("#custSeg button").forEach(b=>{
   b.addEventListener("click",()=>{
     document.querySelectorAll("#custSeg button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on"); CUSTODIA_ON=(b.dataset.cust==="on"); render();
+  });
+});
+document.querySelectorAll("#irSeg button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#irSeg button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); IR_ON=(b.dataset.ir==="on"); render();
   });
 });
 $("btnCsv").addEventListener("click",exportCsv);
