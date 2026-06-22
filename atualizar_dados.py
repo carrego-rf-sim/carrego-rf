@@ -29,6 +29,7 @@ Uso:
 """
 
 import json
+import os
 import sys
 import datetime as dt
 from urllib.request import urlopen, Request
@@ -226,6 +227,60 @@ def fetch_focus():
         return {"selic": {}, "ipca": {}}
 
 
+# Arquivo do Itaú (upload manual mensal). Nome fixo no repo.
+ITAU_ARQUIVO = "itau_longo_prazo.xlsm"
+
+
+def fetch_itau(path=ITAU_ARQUIVO):
+    """Lê o .xlsm do Itaú commitado no repo (upload manual mensal) e extrai
+    CDI acumulado (linha 'CDI - acumulado no ano') e IPCA por ano.
+    Sem o arquivo, ou se falhar, retorna {} e o robô segue só com o Focus."""
+    if not os.path.exists(path):
+        print(f"  Itaú: arquivo '{path}' não encontrado; seguindo sem projeção Itaú.")
+        return {}
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        ws = wb["Brasil"]
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        # linha 2 (índice 1): anos nas colunas; "2026P" -> 2026. Coluna C (índice 2) = nome.
+        header = rows[1]
+        col_ano = {}
+        for j, c in enumerate(header):
+            if c is None:
+                continue
+            s = str(c).strip().replace("P", "")
+            if s.isdigit():
+                col_ano[j] = int(s)
+
+        def pega(rotulo):
+            for r in rows:
+                nome = r[2] if len(r) > 2 else None
+                if nome and str(nome).strip() == rotulo:
+                    out = {}
+                    for j, ano in col_ano.items():
+                        v = r[j] if j < len(r) else None
+                        if isinstance(v, (int, float)):
+                            out[str(ano)] = round(v * 100, 4)   # fração -> %
+                    return out
+            return {}
+
+        cdi = pega("CDI - acumulado no ano")
+        ipca = pega("IPCA")
+        ano0 = HOJE.year
+        cdi = {a: v for a, v in cdi.items() if int(a) >= ano0}     # só projetados
+        ipca = {a: v for a, v in ipca.items() if int(a) >= ano0}
+        if not cdi:
+            print("  Itaú: não achei a linha de CDI; seguindo sem projeção Itaú.")
+            return {}
+        print(f"  Itaú: {len(cdi)} anos de CDI, {len(ipca)} de IPCA")
+        return {"cdi": cdi, "ipca": ipca, "ref": "arquivo Itaú (upload manual)"}
+    except Exception as e:
+        print(f"  Itaú indisponível ({e}); seguindo sem projeção Itaú.")
+        return {}
+
+
 # --------------------------------------------------------------------------- #
 # Classificação dos títulos
 # --------------------------------------------------------------------------- #
@@ -312,7 +367,7 @@ def implicita(venc, taxa_real, pts_nominal):
 # --------------------------------------------------------------------------- #
 # Montagem do dados.json
 # --------------------------------------------------------------------------- #
-def montar(titulos, selic, cdi, focus=None):
+def montar(titulos, selic, cdi, focus=None, itau=None):
     pts_nom = curva_nominal(titulos)
     ntnb = {}
     ltn = {}
@@ -350,6 +405,7 @@ def montar(titulos, selic, cdi, focus=None):
         "ltn": sorted(ltn.values(), key=lambda r: r["venc"]),
         "ntnf": sorted(ntnf.values(), key=lambda r: r["venc"]),
         "focus": focus or {"selic": {}, "ipca": {}},
+        "itau": itau or {},
     }
 
 
@@ -362,8 +418,9 @@ def main():
         return   # termina verde; preserva o último dado bom
     selic = fetch_bacen(432, 14.40)     # Meta Selic % a.a.
     cdi = fetch_bacen(4389, selic)      # CDI a.a. base 252
-    focus = fetch_focus()               # projeções anuais Selic/IPCA
-    saida = montar(titulos, selic, cdi, focus)
+    focus = fetch_focus()               # projeções anuais Selic/IPCA (Focus)
+    itau = fetch_itau()                 # projeções do Itaú (arquivo mensal)
+    saida = montar(titulos, selic, cdi, focus, itau)
     if len(saida["ntnb"]) < 3:
         print(f"AVISO: poucos vértices NTN-B ({len(saida['ntnb'])}); "
               f"mantendo o dados.json anterior.")
@@ -371,8 +428,10 @@ def main():
     with open("dados.json", "w", encoding="utf-8") as f:
         json.dump(saida, f, ensure_ascii=False, indent=2)
     nf = len(saida["focus"].get("selic", {}))
+    ni = len(saida["itau"].get("cdi", {}))
     print(f"OK: {len(saida['ntnb'])} vértices · {saida['date']} · "
-          f"Selic {saida['selic']} · CDI {saida['cdi']} · Focus {nf} anos")
+          f"Selic {saida['selic']} · CDI {saida['cdi']} · "
+          f"Focus {nf} anos · Itaú {ni} anos")
 
 
 # --------------------------------------------------------------------------- #
