@@ -251,7 +251,14 @@
           <div class="seg" id="modeSeg">
             <button data-mode="retorno" class="on" title="Retorno de mercado (carrego + marcação)">Retorno</button>
             <button data-mode="carrego" title="Carrego puro (sem marcação)">Carrego</button>
-            <button data-mode="cdi" title="Retorno como % do CDI projetado (Focus)">% do CDI</button>
+            <button data-mode="cdi" title="Retorno como % do CDI projetado">% do CDI</button>
+          </div>
+        </div>
+        <div class="field" id="srcField" style="display:none">
+          <label class="lbl">Projeção de CDI</label>
+          <div class="seg" id="srcSeg">
+            <button data-src="focus" class="on" title="Mediana do mercado (BACEN) — semanal, automático">Focus</button>
+            <button data-src="itau" title="Casa do Itaú — atualização mensal manual">Itaú</button>
           </div>
         </div>
         <div class="computed">
@@ -382,6 +389,12 @@ let MARKET = {
   focus: {
     selic: {"2026":14.75,"2027":12.50,"2028":10.75,"2029":10.00,"2030":10.00},
     ipca:  {"2026":4.90,"2027":4.20,"2028":3.80,"2029":3.50,"2030":3.50}
+  },
+  // Projeções do Itaú (reserva; robô sobrescreve do .xlsm). ano -> % a.a.
+  itau: {
+    cdi:  {"2026":14.21,"2027":12.99,"2028":11.65,"2029":10.79},
+    ipca: {"2026":5.39,"2027":4.54,"2028":4.00,"2029":4.00},
+    ref:  "reserva (Maio/2026)"
   }
 };
 const ntnbByVertex = () => Object.fromEntries(MARKET.ntnb.map(r=>[r.v,r]));
@@ -464,8 +477,14 @@ function accumFactor(path, T){
   return f;
 }
 function temFocus(){ return MARKET.focus && MARKET.focus.selic && Object.keys(MARKET.focus.selic).length>0; }
-function cdiAcum(base, T){ const f=accumFactor(focusPath(MARKET.focus&&MARKET.focus.selic, base, 16), T); return f==null?null:f-1; }
-function ipcaMedio(base, T){ const f=accumFactor(focusPath(MARKET.focus&&MARKET.focus.ipca, base, 16), T); return f==null?null:Math.pow(f,1/Math.max(T,1e-6))-1; }
+function temItau(){ return MARKET.itau && MARKET.itau.cdi && Object.keys(MARKET.itau.cdi).length>0; }
+let CDISRC = "focus";   // fonte da projeção de CDI: "focus" | "itau"
+// mapa de CDI (Selic p/ Focus, CDI acumulado p/ Itaú) e de IPCA, conforme a fonte ativa
+function mapaCDI(){ return CDISRC==="itau" ? (MARKET.itau&&MARKET.itau.cdi) : (MARKET.focus&&MARKET.focus.selic); }
+function mapaIPCA(){ return CDISRC==="itau" ? (MARKET.itau&&MARKET.itau.ipca) : (MARKET.focus&&MARKET.focus.ipca); }
+function temProj(){ const m=mapaCDI(); return m && Object.keys(m).length>0; }
+function cdiAcum(base, T){ const f=accumFactor(focusPath(mapaCDI(), base, 16), T); return f==null?null:f-1; }
+function ipcaMedio(base, T){ const f=accumFactor(focusPath(mapaIPCA(), base, 16), T); return f==null?null:Math.pow(f,1/Math.max(T,1e-6))-1; }
 
 /* Gera os prazos das colunas adaptados ao tempo até o vencimento:
    títulos curtos ganham passos menores (meses) para não ficar tudo "Vencido". */
@@ -541,12 +560,13 @@ function render(){
   els.durmod.textContent = durmod.toFixed(3);
   els.mxName.textContent = els.nome.value || "Ativo";
   els.mxSub.innerHTML = `Taxa op. <b>${pct(taxa)}</b> · Implícita <b>${pct(impl)}</b> · Duration <b>${dur.toFixed(2)}</b> · Dur. modif. <b>${durmod.toFixed(2)}</b> · venc. <b>${els.venc.value||"—"}</b>`;
-  if(MODE==="cdi" && temFocus()){
+  if(MODE==="cdi" && temProj()){
     const cdi5=cdiAcum(base,5), ipca5=ipcaMedio(base,5);
     const ann5 = cdi5!=null ? Math.pow(1+cdi5,1/5)-1 : null;
-    els.mxSub.innerHTML += `<br><span style="color:var(--teal)">Comparado ao CDI projetado (Focus)</span>` +
+    const fonte = CDISRC==="itau" ? "Itaú" : "Focus";
+    els.mxSub.innerHTML += `<br><span style="color:var(--teal)">Comparado ao CDI projetado (${fonte})</span>` +
       (ann5!=null?` · CDI ~<b>${pct(ann5,1)}</b>/ano (5a)`:``) +
-      (impl>0 && ipca5!=null?` · NTN-B usa IPCA Focus ~<b>${pct(ipca5,1)}</b>`:``) +
+      (impl>0 && ipca5!=null?` · NTN-B usa IPCA ${fonte} ~<b>${pct(ipca5,1)}</b>`:``) +
       ` · <b>100% = empata com o CDI</b>`;
   }
 
@@ -714,7 +734,15 @@ els.preset.addEventListener("change",e=>applyPreset(e.target.value));
 document.querySelectorAll("#modeSeg button").forEach(b=>{
   b.addEventListener("click",()=>{
     document.querySelectorAll("#modeSeg button").forEach(x=>x.classList.remove("on"));
-    b.classList.add("on"); MODE=b.dataset.mode; render();
+    b.classList.add("on"); MODE=b.dataset.mode;
+    document.getElementById("srcField").style.display = (MODE==="cdi") ? "" : "none";
+    render();
+  });
+});
+document.querySelectorAll("#srcSeg button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#srcSeg button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); CDISRC=b.dataset.src; render();
   });
 });
 $("btnCsv").addEventListener("click",exportCsv);
@@ -750,10 +778,14 @@ lockFields();     // trava tudo menos a Taxa operação
     if(!resp.ok) throw new Error("sem dados.json");
     const data = await resp.json();
     if(!data || !Array.isArray(data.ntnb) || data.ntnb.length < 5) throw new Error("formato inválido");
-    const focusReserva = MARKET.focus;   // guarda a reserva antes de trocar
+    const focusReserva = MARKET.focus;   // guarda as reservas antes de trocar
+    const itauReserva = MARKET.itau;
     MARKET = Object.assign({fonte:"Tesouro Direto"}, data);
     if(!MARKET.focus || !MARKET.focus.selic || Object.keys(MARKET.focus.selic).length===0){
       MARKET.focus = focusReserva;       // dados.json sem Focus -> usa a reserva embutida
+    }
+    if(!MARKET.itau || !MARKET.itau.cdi || Object.keys(MARKET.itau.cdi).length===0){
+      MARKET.itau = itauReserva;         // dados.json sem Itaú -> usa a reserva embutida
     }
     PRESETS = presets();
     const cur = els.preset.value || 8;
