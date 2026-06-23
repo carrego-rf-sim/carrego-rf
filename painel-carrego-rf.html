@@ -275,6 +275,14 @@
             <button data-ir="on" title="Líquida de IR (tabela regressiva por prazo)">Líquida (IR)</button>
           </div>
         </div>
+        <div class="field" id="reinvField" style="display:none">
+          <label class="lbl">Reinvestimento dos cupons</label>
+          <div class="seg" id="reinvSeg">
+            <button data-reinv="papel" class="on" title="Cupons reinvestidos à taxa do papel (padrão da matriz)">Taxa do papel</button>
+            <button data-reinv="cdi" title="Cupons reinvestidos ao CDI projetado">CDI</button>
+            <button data-reinv="nenhum" title="Cupons em caixa, sem reinvestir (0%)">Nenhum</button>
+          </div>
+        </div>
         <div class="computed">
           <div class="cbox"><div class="k">Dur. Modif.</div><div class="v" id="cDurMod">—</div></div>
           <div class="cbox alt"><div class="k">Horizonte máx.</div><div class="v" id="cVenc">—</div></div>
@@ -329,6 +337,7 @@
             <div class="fline"><span class="fname">Custódia (Tesouro Direto)</span><span class="feq">aplica arrasto de 0,20% a.a. da B3: Retorno líquido = (1 + Retorno) · (1 − 0,20%)<sup>prazo</sup> − 1. Via tesouraria/mercado secundário não há essa taxa</span></div>
             <div class="fline"><span class="fname">IR · tabela regressiva</span><span class="feq">22,5% (≤180d) · 20% (181–360d) · 17,5% (361–720d) · 15% (&gt;720d), aplicada por prazo (coluna). Incide só sobre o ganho; custódia não abate a base</span></div>
             <div class="fline"><span class="fname">IR · cupons (NTN-F / NTN-B cup.)</span><span class="feq">cada cupom é tributado na sua data, pela alíquota do tempo decorrido (cupons iniciais pagam mais que 15%); o ganho de preço é tributado pela alíquota do prazo</span></div>
+            <div class="fline"><span class="fname">Reinvestimento dos cupons</span><span class="feq">só p/ papéis com cupom. "Taxa do papel" = padrão da matriz; "CDI" = cupons reinvestidos ao CDI projetado; "Nenhum" = cupons em caixa a 0%. Reinvestir abaixo da taxa do papel enfraquece o ganho dos prazos longos</span></div>
           </div>
         </div>
       </div>
@@ -573,6 +582,26 @@ function liquido(retBruto, prazo, cupom, impl){
   if(!IR_ON || retBruto==null) return comCust;
   return comCust - irAmount(retBruto, prazo, cupom, impl);
 }
+let REINV = "papel";   // premissa de reinvestimento de cupons: "papel" | "cdi" | "nenhum"
+// ajuste por reinvestir os cupons a uma taxa diferente da do papel (só p/ títulos com cupom).
+// Mantém o modelo atual quando REINV="papel" (delta = 0).
+function reinvDelta(taxa, varr, impl, prazo, cupom, base){
+  if(REINV==="papel" || !cupom || cupom<=0 || prazo<=0) return 0;
+  const cs = Math.pow(1+cupom, 0.5) - 1;              // cupom semestral
+  const yPaper = (1+impl)*(1+taxa+varr) - 1;          // taxa de reinvest. implícita do modelo atual
+  let rr;
+  if(REINV==="nenhum") rr = 0;
+  else {                                              // "cdi": taxa projetada anualizada
+    const c = cdiAcum(base, prazo);
+    rr = (c==null) ? yPaper : Math.pow(1+c, 1/Math.max(prazo,1e-6)) - 1;
+  }
+  let d = 0;
+  for(let t=0.5; t<=prazo+1e-9; t+=0.5){
+    const cupNom = impl>0 ? cs*Math.pow(1+impl, t) : cs;   // NTN-B: nominaliza pela implícita
+    d += cupNom * (Math.pow(1+rr, prazo-t) - Math.pow(1+yPaper, prazo-t));
+  }
+  return d;
+}
 
 /* fill preset dropdown */
 function fillPresets(){
@@ -588,6 +617,8 @@ function applyPreset(i){
   els.conv.value = p.conv;
   els.presetHint.textContent = p.hint || "";
   ACTIVE_CUPOM = p.cupom || 0;
+  const rf = document.getElementById("reinvField");
+  if(rf) rf.style.display = (ACTIVE_CUPOM > 0) ? "" : "none";
   render();
 }
 
@@ -624,6 +655,10 @@ function render(){
   if(IR_ON){
     els.mxSub.innerHTML += ` · <span style="color:var(--amber)">líquido de IR (tabela regressiva)</span>`;
   }
+  if(ACTIVE_CUPOM>0 && REINV!=="papel"){
+    const txt = REINV==="cdi" ? "cupons reinvestidos ao CDI" : "cupons sem reinvestir (0%)";
+    els.mxSub.innerHTML += ` · <span style="color:var(--amber)">${txt}</span>`;
+  }
   if(MODE==="cdi" && temProj()){
     const cdi5=cdiAcum(base,5), ipca5=ipcaMedio(base,5);
     const ann5 = cdi5!=null ? Math.pow(1+cdi5,1/5)-1 : null;
@@ -657,13 +692,15 @@ function render(){
           if(cdiR==null || cdiR<=0){ val=null; }
           else {
             const implCdi = impl>0 ? (ipcaMedio(base,p)||0) : 0;  // NTN-B usa IPCA do Focus
-            const retAtivo = liquido(retorno(implCdi, taxa, varr, p, durmod), p, ACTIVE_CUPOM, impl);
+            const brutoAtivo = retorno(implCdi, taxa, varr, p, durmod) + reinvDelta(taxa, varr, impl, p, ACTIVE_CUPOM, base);
+            const retAtivo = liquido(brutoAtivo, p, ACTIVE_CUPOM, impl);
             // benchmark CDI também líquido de IR quando aplicável (mantém comparação justa)
             const cdiCmp = IR_ON ? cdiR*(1-aliqIR(p)) : cdiR;
             val = retAtivo / cdiCmp;  // 1,0 = 100% do CDI
           }
         } else {
-          const bruto = MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod);
+          const bruto = (MODE==="carrego" ? carrego(impl,taxa,varr,p) : retorno(impl,taxa,varr,p,durmod))
+                        + reinvDelta(taxa, varr, impl, p, ACTIVE_CUPOM, base);
           val = liquido(bruto, p, ACTIVE_CUPOM, impl);
         }
         line.push(val); finite.push(val);
@@ -823,6 +860,12 @@ document.querySelectorAll("#irSeg button").forEach(b=>{
   b.addEventListener("click",()=>{
     document.querySelectorAll("#irSeg button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on"); IR_ON=(b.dataset.ir==="on"); render();
+  });
+});
+document.querySelectorAll("#reinvSeg button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#reinvSeg button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); REINV=b.dataset.reinv; render();
   });
 });
 $("btnCsv").addEventListener("click",exportCsv);
