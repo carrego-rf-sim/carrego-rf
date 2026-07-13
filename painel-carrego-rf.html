@@ -168,6 +168,17 @@
   footer b{color:var(--txt-dim)}
   .tag{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border:1px solid var(--line-2);
     border-radius:5px;color:var(--txt-dim);margin-left:8px;vertical-align:middle}
+  .tabs{display:flex;gap:8px;margin-bottom:16px}
+  .tabs button{background:var(--panel);color:var(--txt-dim);border:1px solid var(--line);
+    border-radius:10px;padding:11px 18px;font-size:14px;font-weight:600;cursor:pointer}
+  .tabs button.on{background:var(--amber);color:#0b1014;border-color:var(--amber)}
+  .ctab{width:100%;border-collapse:collapse}
+  .ctab th,.ctab td{padding:12px 10px;text-align:center;border-bottom:1px solid var(--line)}
+  .ctab th{color:var(--txt-faint);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  .ctab td.cls{text-align:left;font-weight:600;color:var(--txt)}
+  .ctab .pct{font-size:16px;font-weight:700}
+  .ctab .who{display:block;font-size:11px;color:var(--txt-faint);font-weight:400;margin-top:2px}
+  .ctab td.win{outline:2px solid var(--amber);outline-offset:-2px;border-radius:6px}
 </style>
 </head>
 <body>
@@ -188,7 +199,11 @@
 </div>
 
 <div class="wrap">
-  <div class="grid">
+  <div class="tabs" id="tabs">
+    <button data-tab="matriz" class="on">Matriz de carrego</button>
+    <button data-tab="comp">Comparador pré × pós × inflação</button>
+  </div>
+  <div class="grid" id="viewMatriz">
 
     <!-- ============ CONTROLS ============ -->
     <div class="panel" style="position:sticky;top:90px">
@@ -378,6 +393,40 @@
         Uso interno e informativo. Não constitui oferta, recomendação de investimento ou garantia de rentabilidade.
         Dados meramente indicativos, sujeitos a atualização.
       </footer>
+    </div>
+  </div>
+
+  <!-- ============ COMPARADOR ============ -->
+  <div id="viewComp" style="display:none">
+    <div class="panel">
+      <div class="panel-h"><span class="dot"></span><h2>Comparador pré × pós × inflação</h2>
+        <span class="note">melhor representante de cada classe · % do CDI projetado</span></div>
+      <div class="panel-b">
+        <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px">
+          <div class="field" style="margin:0">
+            <label class="lbl">Projeção de CDI</label>
+            <div class="seg" id="srcSegC">
+              <button data-src="focus" class="on">Focus</button>
+              <button data-src="itau">Itaú</button>
+            </div>
+          </div>
+          <div class="field" style="margin:0">
+            <label class="lbl">Rentabilidade</label>
+            <div class="seg" id="irSegC">
+              <button data-ir="off" class="on">Bruta</button>
+              <button data-ir="on">Líquida (IR)</button>
+            </div>
+          </div>
+        </div>
+        <div id="compWrap"></div>
+        <footer style="margin-top:18px">
+          <b>Como ler:</b> cada célula mostra o retorno da <b>melhor opção da classe</b> como % do CDI projetado no horizonte, no cenário de taxa estável.
+          <b>Pós = 100%</b> (é o próprio CDI). Acima de 100% (verde) rende mais que o CDI; abaixo (vermelho), menos.
+          O melhor título de cada classe/horizonte aparece em cada célula. Pré = LTN/NTN-F; Inflação = NTN-B (usa IPCA projetado);
+          Pós = título atrelado ao CDI (ex.: LFT / CDB 100%).<br><br>
+          Mesma metodologia da matriz. Uso interno e informativo; não constitui oferta ou recomendação.
+        </footer>
+      </div>
     </div>
   </div>
 </div>
@@ -831,6 +880,61 @@ function exportCsv(){
   a.click();
 }
 
+/* ======================= COMPARADOR ======================= */
+const COMP_HORIZ = [1,2,3,5,7,10];
+function melhorClasse(bonds, tipo, base, T){
+  const cdiR = cdiAcum(base,T);
+  if(cdiR==null || cdiR<=0) return {v:null, who:""};
+  let best=null, who="";
+  (bonds||[]).forEach(b=>{
+    if(anosAteVenc(base, new Date(b.venc+"T00:00:00")) < T-1e-6) return;   // precisa ter prazo
+    let taxa, impl, cupom;
+    if(tipo==="ntnb"){ taxa=b.expect/100; impl=b.impl/100; cupom=0.06; }
+    else { taxa=b.taxa/100; impl=0; cupom=(tipo==="ntnf")?0.10:0; }
+    const durmod=(b.du||T)/(1+taxa);
+    const implCdi = impl>0 ? (ipcaMedio(base,T)||0) : 0;   // NTN-B nominaliza c/ IPCA projetado
+    const bruto = retorno(implCdi, taxa, 0, T, durmod) + reinvDelta(taxa, 0, impl, T, cupom, base);
+    const liq = liquido(bruto, T, cupom, impl);
+    const cdiCmp = IR_ON ? cdiR*(1-aliqIR(T)) : cdiR;
+    const v = liq/cdiCmp;
+    if(best==null || v>best){ best=v; who=b.v; }
+  });
+  return {v:best, who};
+}
+function renderComparador(){
+  const wrap=document.getElementById("compWrap");
+  const base = els.base.value ? new Date(els.base.value+"T00:00:00") : new Date();
+  if(!temProj()){ wrap.innerHTML="<p style='color:var(--txt-faint);padding:12px'>Sem projeção de CDI disponível para comparar.</p>"; return; }
+  const preAll=[...(MARKET.ltn||[]),...(MARKET.ntnf||[])];
+  const horizons=COMP_HORIZ.filter(T=>preAll.some(b=>anosAteVenc(base,new Date(b.venc+"T00:00:00"))>=T-1e-6));
+  if(!horizons.length){ wrap.innerHTML="<p style='color:var(--txt-faint);padding:12px'>Sem prazos elegíveis nos dados atuais.</p>"; return; }
+  const rows=[
+    {nome:"Pré", sub:"LTN / NTN-F", cells:horizons.map(T=>{
+      const a=melhorClasse(MARKET.ltn,"ltn",base,T), b=melhorClasse(MARKET.ntnf,"ntnf",base,T);
+      return (a.v==null)?b:((b.v==null)?a:(a.v>=b.v?a:b));
+    })},
+    {nome:"Pós", sub:"CDI · LFT / CDB 100%", cells:horizons.map(()=>({v:1.0,who:""}))},
+    {nome:"Inflação", sub:"NTN-B (IPCA proj.)", cells:horizons.map(T=>melhorClasse(MARKET.ntnb,"ntnb",base,T))},
+  ];
+  const winners=horizons.map((T,ci)=>{ let bi=-1,bv=-9; rows.forEach((r,ri)=>{const v=r.cells[ci].v; if(v!=null&&v>bv){bv=v;bi=ri;}}); return bi; });
+  let h="<table class='ctab'><thead><tr><th class='cls'>Classe</th>";
+  horizons.forEach(T=>h+=`<th>${T} ${T===1?"ano":"anos"}</th>`);
+  h+="</tr></thead><tbody>";
+  rows.forEach((r,ri)=>{
+    h+=`<tr><td class='cls'>${r.nome}<span class='who'>${r.sub}</span></td>`;
+    r.cells.forEach((c,ci)=>{
+      if(c.v==null){ h+="<td style='color:var(--txt-faint)'>—</td>"; return; }
+      const bg=scaleColor(c.v,0.85,1.0,1.20);
+      const win=(winners[ci]===ri)?" win":"";
+      const who=(r.nome==="Pós")?"":`<span class='who'>${c.who||""}</span>`;
+      h+=`<td class='${win}' style='background:${bg}'><span class='pct'>${pct(c.v,0)}</span>${who}</td>`;
+    });
+    h+="</tr>";
+  });
+  h+="</tbody></table>";
+  wrap.innerHTML=h;
+}
+
 /* ======================= EVENTOS ======================= */
 ["nome","venc","taxa","impl","dur","intv","rows","conv","base"].forEach(id=>{
   $(id).addEventListener("input",render);
@@ -870,6 +974,35 @@ document.querySelectorAll("#reinvSeg button").forEach(b=>{
 });
 $("btnCsv").addEventListener("click",exportCsv);
 $("fileInput").addEventListener("change",e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
+
+/* --- Abas: Matriz / Comparador --- */
+document.querySelectorAll("#tabs button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#tabs button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on");
+    const comp = b.dataset.tab==="comp";
+    document.getElementById("viewMatriz").style.display = comp ? "none" : "";
+    document.getElementById("viewComp").style.display = comp ? "" : "none";
+    if(comp){
+      // sincroniza os botões do comparador com o estado global
+      document.querySelectorAll("#srcSegC button").forEach(x=>x.classList.toggle("on", x.dataset.src===CDISRC));
+      document.querySelectorAll("#irSegC button").forEach(x=>x.classList.toggle("on", (x.dataset.ir==="on")===IR_ON));
+      renderComparador();
+    }
+  });
+});
+document.querySelectorAll("#srcSegC button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#srcSegC button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); CDISRC=b.dataset.src; renderComparador();
+  });
+});
+document.querySelectorAll("#irSegC button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#irSegC button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); IR_ON=(b.dataset.ir==="on"); renderComparador();
+  });
+});
 
 /* ======================= TRAVA DE EDIÇÃO ======================= */
 /* Editáveis pelo assessor: Taxa operação, Intervalo e Nº de cenários.
