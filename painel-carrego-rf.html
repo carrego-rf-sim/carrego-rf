@@ -176,8 +176,9 @@
   .ctab th,.ctab td{padding:12px 10px;text-align:center;border-bottom:1px solid var(--line)}
   .ctab th{color:var(--txt-faint);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
   .ctab td.cls{text-align:left;font-weight:600;color:var(--txt)}
-  .ctab .pct{font-size:16px;font-weight:700}
-  .ctab .who{display:block;font-size:11px;color:var(--txt-faint);font-weight:400;margin-top:2px}
+  .ctab .pct{font-size:16px;font-weight:700;color:#10171c}
+  .ctab .who{display:block;font-size:11px;color:rgba(0,0,0,.6);font-weight:500;margin-top:2px}
+  .ctab td.cls .who{color:var(--txt-faint);font-weight:400}
   .ctab td.win{outline:2px solid var(--amber);outline-offset:-2px;border-radius:6px}
 </style>
 </head>
@@ -400,11 +401,36 @@
   <div id="viewComp" style="display:none">
     <div class="panel">
       <div class="panel-h"><span class="dot"></span><h2>Comparador pré × pós × inflação</h2>
-        <span class="note">melhor representante de cada classe · % do CDI projetado</span></div>
+        <span class="note">digite as taxas · o painel diz qual indexador vale mais</span></div>
       <div class="panel-b">
-        <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="crow" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:8px">
           <div class="field" style="margin:0">
-            <label class="lbl">Projeção de CDI</label>
+            <label class="lbl">Pré · taxa nominal %</label>
+            <input id="cPre" type="number" step="0.01" value="14.50">
+          </div>
+          <div class="field" style="margin:0">
+            <label class="lbl">Pós · % do CDI</label>
+            <input id="cPos" type="number" step="1" value="100">
+          </div>
+          <div class="field" style="margin:0">
+            <label class="lbl">IPCA+ · taxa real %</label>
+            <input id="cReal" type="number" step="0.01" value="7.00">
+          </div>
+          <div class="field" style="margin:0">
+            <label class="lbl">Horizonte (anos)</label>
+            <input id="cHoriz" type="number" step="1" min="1" max="30" value="5">
+          </div>
+        </div>
+        <div style="display:flex;gap:20px;flex-wrap:wrap;margin:14px 0">
+          <div class="field" style="margin:0">
+            <label class="lbl">Exibir</label>
+            <div class="seg" id="metSegC">
+              <button data-met="cdi" class="on">% do CDI</button>
+              <button data-met="abs">Retorno absoluto</button>
+            </div>
+          </div>
+          <div class="field" style="margin:0">
+            <label class="lbl">Projeção de CDI / IPCA</label>
             <div class="seg" id="srcSegC">
               <button data-src="focus" class="on">Focus</button>
               <button data-src="itau">Itaú</button>
@@ -420,11 +446,11 @@
         </div>
         <div id="compWrap"></div>
         <footer style="margin-top:18px">
-          <b>Como ler:</b> cada célula mostra o retorno da <b>melhor opção da classe</b> como % do CDI projetado no horizonte, no cenário de taxa estável.
-          <b>Pós = 100%</b> (é o próprio CDI). Acima de 100% (verde) rende mais que o CDI; abaixo (vermelho), menos.
-          O melhor título de cada classe/horizonte aparece em cada célula. Pré = LTN/NTN-F; Inflação = NTN-B (usa IPCA projetado);
-          Pós = título atrelado ao CDI (ex.: LFT / CDB 100%).<br><br>
-          Mesma metodologia da matriz. Uso interno e informativo; não constitui oferta ou recomendação.
+          <b>Como funciona:</b> você digita a taxa de cada indexador e o comparador calcula o <b>carrego</b> de cada um no horizonte
+          (cenário de taxa estável, sem marcação a mercado). O <b>pós</b> usa o CDI projetado (Focus/Itaú) × o % que você indicar;
+          o <b>IPCA+</b> soma a inflação projetada à taxa real que você digitar. No modo <b>% do CDI</b>, 100% = empata com o CDI.
+          A opção vencedora aparece destacada.<br><br>
+          Só considera o carrego das taxas; não embute ágio/deságio de marcação. Uso interno e informativo; não constitui oferta ou recomendação.
         </footer>
       </div>
     </div>
@@ -880,58 +906,54 @@ function exportCsv(){
   a.click();
 }
 
-/* ======================= COMPARADOR ======================= */
-const COMP_HORIZ = [1,2,3,5,7,10];
-function melhorClasse(bonds, tipo, base, T){
-  const cdiR = cdiAcum(base,T);
-  if(cdiR==null || cdiR<=0) return {v:null, who:""};
-  let best=null, who="";
-  (bonds||[]).forEach(b=>{
-    if(anosAteVenc(base, new Date(b.venc+"T00:00:00")) < T-1e-6) return;   // precisa ter prazo
-    let taxa, impl, cupom;
-    if(tipo==="ntnb"){ taxa=b.expect/100; impl=b.impl/100; cupom=0.06; }
-    else { taxa=b.taxa/100; impl=0; cupom=(tipo==="ntnf")?0.10:0; }
-    const durmod=(b.du||T)/(1+taxa);
-    const implCdi = impl>0 ? (ipcaMedio(base,T)||0) : 0;   // NTN-B nominaliza c/ IPCA projetado
-    const bruto = retorno(implCdi, taxa, 0, T, durmod) + reinvDelta(taxa, 0, impl, T, cupom, base);
-    const liq = liquido(bruto, T, cupom, impl);
-    const cdiCmp = IR_ON ? cdiR*(1-aliqIR(T)) : cdiR;
-    const v = liq/cdiCmp;
-    if(best==null || v>best){ best=v; who=b.v; }
-  });
-  return {v:best, who};
-}
+/* ======================= COMPARADOR (manual) ======================= */
+let COMP_MET = "cdi";   // "cdi" = % do CDI · "abs" = retorno absoluto
 function renderComparador(){
   const wrap=document.getElementById("compWrap");
   const base = els.base.value ? new Date(els.base.value+"T00:00:00") : new Date();
-  if(!temProj()){ wrap.innerHTML="<p style='color:var(--txt-faint);padding:12px'>Sem projeção de CDI disponível para comparar.</p>"; return; }
-  const preAll=[...(MARKET.ltn||[]),...(MARKET.ntnf||[])];
-  const horizons=COMP_HORIZ.filter(T=>preAll.some(b=>anosAteVenc(base,new Date(b.venc+"T00:00:00"))>=T-1e-6));
-  if(!horizons.length){ wrap.innerHTML="<p style='color:var(--txt-faint);padding:12px'>Sem prazos elegíveis nos dados atuais.</p>"; return; }
-  const rows=[
-    {nome:"Pré", sub:"LTN / NTN-F", cells:horizons.map(T=>{
-      const a=melhorClasse(MARKET.ltn,"ltn",base,T), b=melhorClasse(MARKET.ntnf,"ntnf",base,T);
-      return (a.v==null)?b:((b.v==null)?a:(a.v>=b.v?a:b));
-    })},
-    {nome:"Pós", sub:"CDI · LFT / CDB 100%", cells:horizons.map(()=>({v:1.0,who:""}))},
-    {nome:"Inflação", sub:"NTN-B (IPCA proj.)", cells:horizons.map(T=>melhorClasse(MARKET.ntnb,"ntnb",base,T))},
+  const g = id => (+document.getElementById(id).value || 0);
+  const T = Math.max(1, g("cHoriz"));
+  const gPre = g("cPre")/100, posPct = g("cPos")/100, gReal = g("cReal")/100;
+  const cdiR = cdiAcum(base, T);
+  if(cdiR==null || cdiR<=0){ wrap.innerHTML="<p style='color:var(--txt-faint);padding:12px'>Sem projeção de CDI para esse horizonte. Verifique Focus/Itaú.</p>"; return; }
+  const cdiAnnual = Math.pow(1+cdiR, 1/T) - 1;
+  const infl = ipcaMedio(base, T) || 0;
+  // retornos absolutos acumulados (carrego, cenário de taxa estável)
+  const preAbs = Math.pow(1+gPre, T) - 1;
+  const posAbs = Math.pow(1 + cdiAnnual*posPct, T) - 1;
+  const nominalIpca = (1+gReal)*(1+infl) - 1;
+  const ipcaAbs = Math.pow(1+nominalIpca, T) - 1;
+  const net = r => IR_ON ? r - aliqIR(T)*r : r;   // IR opcional (taxas tratadas como limpas)
+  const items=[
+    {nome:"Pré", sub:`${(gPre*100).toFixed(2)}% nominal`, abs:net(preAbs)},
+    {nome:"Pós", sub:`${(posPct*100).toFixed(0)}% do CDI`, abs:net(posAbs)},
+    {nome:"IPCA+", sub:`${(gReal*100).toFixed(2)}% real + IPCA ${(infl*100).toFixed(1)}%`, abs:net(ipcaAbs)},
   ];
-  const winners=horizons.map((T,ci)=>{ let bi=-1,bv=-9; rows.forEach((r,ri)=>{const v=r.cells[ci].v; if(v!=null&&v>bv){bv=v;bi=ri;}}); return bi; });
-  let h="<table class='ctab'><thead><tr><th class='cls'>Classe</th>";
-  horizons.forEach(T=>h+=`<th>${T} ${T===1?"ano":"anos"}</th>`);
-  h+="</tr></thead><tbody>";
-  rows.forEach((r,ri)=>{
-    h+=`<tr><td class='cls'>${r.nome}<span class='who'>${r.sub}</span></td>`;
-    r.cells.forEach((c,ci)=>{
-      if(c.v==null){ h+="<td style='color:var(--txt-faint)'>—</td>"; return; }
-      const bg=scaleColor(c.v,0.85,1.0,1.20);
-      const win=(winners[ci]===ri)?" win":"";
-      const who=(r.nome==="Pós")?"":`<span class='who'>${c.who||""}</span>`;
-      h+=`<td class='${win}' style='background:${bg}'><span class='pct'>${pct(c.v,0)}</span>${who}</td>`;
-    });
-    h+="</tr>";
+  const cdiCmp = IR_ON ? cdiR - aliqIR(T)*cdiR : cdiR;
+  items.forEach(it=>{ it.cdi = it.abs / cdiCmp; it.anual = Math.pow(1+it.abs, 1/T)-1; });
+  const bestAbs = Math.max(...items.map(i=>i.abs));
+  const worstAbs = Math.min(...items.map(i=>i.abs));
+  const modoAbs = COMP_MET==="abs";
+  const col2 = modoAbs ? `Retorno em ${T} ${T===1?"ano":"anos"}` : "% do CDI projetado";
+  let h=`<div style="margin-bottom:10px;color:var(--txt-dim);font-size:13px">Horizonte <b style="color:var(--txt)">${T} ${T===1?"ano":"anos"}</b> · CDI projetado <b style="color:var(--txt)">${pct(cdiAnnual,1)}/ano</b> · IPCA projetado <b style="color:var(--txt)">${pct(infl,1)}/ano</b>${IR_ON?' · <span style="color:var(--amber)">líquido de IR</span>':''}</div>`;
+  h+=`<table class='ctab'><thead><tr><th class='cls'>Indexador</th><th>${col2}</th><th>Equivalente anual</th></tr></thead><tbody>`;
+  items.forEach(it=>{
+    const win = (it.abs===bestAbs) ? " win" : "";
+    let bg;
+    if(modoAbs){
+      const mid=(bestAbs+worstAbs)/2;
+      bg = scaleColor(it.abs, worstAbs-1e-9, mid, bestAbs+1e-9);
+    } else {
+      bg = scaleColor(it.cdi, 0.85, 1.0, 1.20);
+    }
+    const val = modoAbs ? pct(it.abs,1) : pct(it.cdi,0);
+    h+=`<tr><td class='cls'>${it.nome}<span class='who'>${it.sub}</span></td>`
+      +`<td class='${win}' style='background:${bg}'><span class='pct'>${val}</span></td>`
+      +`<td><span class='pct' style='color:var(--txt)'>${pct(it.anual,2)}</span></td></tr>`;
   });
   h+="</tbody></table>";
+  const venc = items.find(i=>i.abs===bestAbs);
+  h+=`<div style="margin-top:12px;font-size:14px"><b style="color:var(--amber)">Vencedor: ${venc.nome}</b> <span style="color:var(--txt-dim)">— rende mais no horizonte de ${T} ${T===1?"ano":"anos"} nas condições informadas${modoAbs?"":" ("+pct(venc.cdi,0)+" do CDI)"}.</span></div>`;
   wrap.innerHTML=h;
 }
 
@@ -1002,6 +1024,16 @@ document.querySelectorAll("#irSegC button").forEach(b=>{
     document.querySelectorAll("#irSegC button").forEach(x=>x.classList.remove("on"));
     b.classList.add("on"); IR_ON=(b.dataset.ir==="on"); renderComparador();
   });
+});
+document.querySelectorAll("#metSegC button").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("#metSegC button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); COMP_MET=b.dataset.met; renderComparador();
+  });
+});
+["cPre","cPos","cReal","cHoriz"].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el) el.addEventListener("input", renderComparador);
 });
 
 /* ======================= TRAVA DE EDIÇÃO ======================= */
