@@ -1,9 +1,9 @@
 {
   "date": "15/10/2026",
-  "selic": 14.4,
+  "selic": 13.75,
   "cdi": 13.65,
   "fonte": "Tesouro Transparente + BACEN",
-  "atualizado_em": "2026-10-20T00:34:26",
+  "atualizado_em": "2026-10-22T00:09:01",
   "ntnb": [
     {
       "v": "NTN-B 29",
