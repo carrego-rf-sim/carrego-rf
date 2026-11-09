@@ -168,6 +168,10 @@
   footer b{color:var(--txt-dim)}
   .tag{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border:1px solid var(--line-2);
     border-radius:5px;color:var(--txt-dim);margin-left:8px;vertical-align:middle}
+  .ptab{width:100%;border-collapse:collapse;margin-top:4px}
+  .ptab th,.ptab td{padding:9px 10px;text-align:center;border-bottom:1px solid var(--line);font-size:13px;color:var(--txt-dim)}
+  .ptab th{color:var(--txt-faint);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  .ptab td.pl{text-align:left;font-weight:600;color:var(--txt)}
   .tabs{display:flex;gap:8px;margin-bottom:16px}
   .tabs button{background:var(--panel);color:var(--txt-dim);border:1px solid var(--line);
     border-radius:10px;padding:11px 18px;font-size:14px;font-weight:600;cursor:pointer}
@@ -458,6 +462,20 @@
       </div>
     </div>
   </div>
+
+  <!-- ============ PREMISSAS MACRO ============ -->
+  <div class="panel" style="margin-top:4px">
+    <div class="panel-h"><span class="dot"></span><h2>Premissas macro · projeções</h2>
+      <span class="note" id="projRef"></span></div>
+    <div class="panel-b">
+      <div id="projWrap"></div>
+      <footer style="margin-top:14px">
+        <b>CDI/Selic</b> e <b>IPCA</b> acumulados por ano, conforme a fonte. <b>Focus</b> = mediana do mercado (BACEN · semanal · automático);
+        <b>Itaú</b> = relatório "Brasil – Longo Prazo" (atualização mensal manual). São as premissas que alimentam o "% do CDI", o comparador
+        e a nominalização das NTN-B. Anos além do último projetado são achatados (repete-se o último valor).
+      </footer>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -499,9 +517,9 @@ let MARKET = {
   },
   // Projeções do Itaú (reserva; robô sobrescreve do .xlsm). ano -> % a.a.
   itau: {
-    cdi:  {"2026":14.21,"2027":12.99,"2028":11.65,"2029":10.79},
-    ipca: {"2026":5.39,"2027":4.54,"2028":4.00,"2029":4.00},
-    ref:  "reserva (Maio/2026)"
+    cdi:  {"2026":14.23,"2027":13.63,"2028":13.04,"2029":11.98},
+    ipca: {"2026":5.24,"2027":6.07,"2028":4.50,"2029":4.00},
+    ref:  "reserva (Nov/2026)"
   }
 };
 const ntnbByVertex = () => Object.fromEntries(MARKET.ntnb.map(r=>[r.v,r]));
@@ -838,6 +856,30 @@ function render(){
     c.addEventListener("mouseenter",()=>highlightCol(c.dataset.col,true));
     c.addEventListener("mouseleave",()=>highlightCol(c.dataset.col,false));
   });
+  renderProjections();
+}
+/* premissas macro no rodapé — montado a partir dos dados em uso (Focus/Itaú) */
+function renderProjections(){
+  const wrap=document.getElementById("projWrap");
+  if(!wrap) return;
+  const fc=(MARKET.focus&&MARKET.focus.selic)||{}, fi=(MARKET.focus&&MARKET.focus.ipca)||{};
+  const ic=(MARKET.itau&&MARKET.itau.cdi)||{}, ii=(MARKET.itau&&MARKET.itau.ipca)||{};
+  const anos=[...new Set([...Object.keys(fc),...Object.keys(fi),...Object.keys(ic),...Object.keys(ii)])].map(Number).sort((a,b)=>a-b);
+  if(!anos.length){ wrap.innerHTML="<p style='color:var(--txt-faint);padding:8px'>Sem projeções carregadas.</p>"; return; }
+  const cell=(m,y)=> (m[y]!=null) ? (Number(m[y]).toFixed(2)+"%") : "—";
+  const linhas=[["Focus · CDI/Selic",fc],["Focus · IPCA",fi],["Itaú · CDI",ic],["Itaú · IPCA",ii]];
+  let h="<table class='ptab'><thead><tr><th class='pl'>Fonte</th>";
+  anos.forEach(y=>h+=`<th>${y}</th>`);
+  h+="</tr></thead><tbody>";
+  linhas.forEach(([lab,m])=>{
+    h+=`<tr><td class='pl'>${lab}</td>`;
+    anos.forEach(y=>h+=`<td>${cell(m,y)}</td>`);
+    h+="</tr>";
+  });
+  h+="</tbody></table>";
+  wrap.innerHTML=h;
+  const ref=document.getElementById("projRef");
+  if(ref) ref.textContent = (MARKET.itau&&MARKET.itau.ref) ? ("Itaú: "+MARKET.itau.ref) : "";
 }
 function highlightCol(col,on){
   els.mxTable.querySelectorAll(`[data-col='${col}']`).forEach(c=>c.classList.toggle("colhi",on));
