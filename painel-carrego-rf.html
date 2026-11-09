@@ -448,8 +448,11 @@
         <footer style="margin-top:18px">
           <b>Como funciona:</b> você digita a taxa de cada indexador e o comparador calcula o <b>carrego</b> de cada um no horizonte
           (cenário de taxa estável, sem marcação a mercado). O <b>pós</b> usa o CDI projetado (Focus/Itaú) × o % que você indicar;
-          o <b>IPCA+</b> soma a inflação projetada à taxa real que você digitar. No modo <b>% do CDI</b>, 100% = empata com o CDI.
-          A opção vencedora aparece destacada.<br><br>
+          o <b>IPCA+</b> soma a inflação projetada à taxa real que você digitar. A opção vencedora aparece destacada.<br><br>
+          <b>Definição de "% do CDI" nesta aba:</b> é a razão entre as <b>taxas anuais equivalentes</b> (convenção de contrato) —
+          um papel a 105% do CDI aparece como 105%, em qualquer horizonte. <b>Atenção:</b> na aba <i>Matriz de carrego</i> o "% do CDI"
+          usa outra definição — a razão entre os <b>ganhos acumulados</b> (métrica de performance), que para quem rende acima do CDI
+          cresce com o prazo (ex.: 105% contratado ≈ 106% em 3 anos, ≈ 108% em 10 anos). As duas estão corretas: respondem a perguntas diferentes.<br><br>
           Só considera o carrego das taxas; não embute ágio/deságio de marcação. Uso interno e informativo; não constitui oferta ou recomendação.
         </footer>
       </div>
@@ -930,11 +933,14 @@ function renderComparador(){
     {nome:"IPCA+", sub:`${(gReal*100).toFixed(2)}% real + IPCA ${(infl*100).toFixed(1)}%`, abs:net(ipcaAbs)},
   ];
   const cdiCmp = IR_ON ? cdiR - aliqIR(T)*cdiR : cdiR;
-  items.forEach(it=>{ it.cdi = it.abs / cdiCmp; it.anual = Math.pow(1+it.abs, 1/T)-1; });
+  // "% do CDI" = razão das TAXAS anuais equivalentes (convenção de contrato):
+  // um papel contratado a 105% do CDI aparece como 105%, independente do horizonte.
+  const cdiAnualCmp = Math.pow(1+cdiCmp, 1/T) - 1;
+  items.forEach(it=>{ it.anual = Math.pow(1+it.abs, 1/T)-1; it.cdi = it.anual / cdiAnualCmp; });
   const bestAbs = Math.max(...items.map(i=>i.abs));
   const worstAbs = Math.min(...items.map(i=>i.abs));
   const modoAbs = COMP_MET==="abs";
-  const col2 = modoAbs ? `Retorno em ${T} ${T===1?"ano":"anos"}` : "% do CDI projetado";
+  const col2 = modoAbs ? `Retorno em ${T} ${T===1?"ano":"anos"}` : "% do CDI (taxa anual)";
   let h=`<div style="margin-bottom:10px;color:var(--txt-dim);font-size:13px">Horizonte <b style="color:var(--txt)">${T} ${T===1?"ano":"anos"}</b> · CDI projetado <b style="color:var(--txt)">${pct(cdiAnnual,1)}/ano</b> · IPCA projetado <b style="color:var(--txt)">${pct(infl,1)}/ano</b>${IR_ON?' · <span style="color:var(--amber)">líquido de IR</span>':''}</div>`;
   h+=`<table class='ctab'><thead><tr><th class='cls'>Indexador</th><th>${col2}</th><th>Equivalente anual</th></tr></thead><tbody>`;
   items.forEach(it=>{
